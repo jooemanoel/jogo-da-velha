@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Jogo da Velha com Camadas</title>
+<title>Jogo da Velha com Animações</title>
 <style>
   html, body {
     margin: 0;
@@ -73,7 +73,7 @@ function drawBoard() {
     boardCtx.stroke();
   }
 
-  // redesenha jogadas (sem animação)
+  // redesenha jogadas já feitas
   animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) {
@@ -83,7 +83,7 @@ function drawBoard() {
   }
 }
 
-animCanvas.addEventListener('click', (e) => {
+animCanvas.addEventListener('click', async (e) => {
   if (gameOver) {
     resetGame();
     return;
@@ -97,102 +97,136 @@ animCanvas.addEventListener('click', (e) => {
   const r = Math.floor(y / cellSize);
   if (board[r][c]) return;
 
-  if (currentPlayer === 'X') {
-    board[r][c] = 'X';
-    drawX(r, c, true);
-    if (checkWin('X')) return endGame('X');
-    currentPlayer = 'O';
-  } else {
-    board[r][c] = 'O';
-    drawO(r, c, true);
-    if (checkWin('O')) return endGame('O');
-    currentPlayer = 'X';
+  board[r][c] = currentPlayer;
+  const drawPromise =
+    currentPlayer === 'X' ? drawX(r, c, true) : drawO(r, c, true);
+
+  const winner = checkWin(currentPlayer);
+  await drawPromise;
+
+  if (winner) {
+    drawWinLine(winner[0], winner[1]);
+    gameOver = true;
+    return;
   }
 
-  if (board.flat().every(cell => cell)) endGame(null);
+  if (board.flat().every(cell => cell)) {
+    gameOver = true;
+    return;
+  }
+
+  currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
 });
 
 function drawX(row, col, animate = true) {
-  const x0 = offsetX + col * cellSize;
-  const y0 = offsetY + row * cellSize;
-  const pad = cellSize * 0.2;
+  return new Promise((resolve) => {
+    const x0 = offsetX + col * cellSize;
+    const y0 = offsetY + row * cellSize;
+    const pad = cellSize * 0.2;
 
-  const line1 = { x1: x0 + pad, y1: y0 + pad, x2: x0 + cellSize - pad, y2: y0 + cellSize - pad };
-  const line2 = { x1: x0 + cellSize - pad, y1: y0 + pad, x2: x0 + pad, y2: y0 + cellSize - pad };
+    const line1 = { x1: x0 + pad, y1: y0 + pad, x2: x0 + cellSize - pad, y2: y0 + cellSize - pad };
+    const line2 = { x1: x0 + cellSize - pad, y1: y0 + pad, x2: x0 + pad, y2: y0 + cellSize - pad };
 
-  animCtx.lineWidth = 10;
-  animCtx.strokeStyle = '#00ffff';
-  animCtx.lineCap = 'round';
+    animCtx.save();
+    animCtx.lineWidth = 10;
+    animCtx.strokeStyle = '#00ffff';
+    animCtx.lineCap = 'round';
 
-  if (!animate) {
-    animCtx.beginPath();
-    animCtx.moveTo(line1.x1, line1.y1);
-    animCtx.lineTo(line1.x2, line1.y2);
-    animCtx.moveTo(line2.x1, line2.y1);
-    animCtx.lineTo(line2.x2, line2.y2);
-    animCtx.stroke();
-    return;
-  }
-
-  const duration = 400;
-  let start = null;
-
-  function step(time) {
-    if (!start) start = time;
-    const elapsed = time - start;
-    const progress = Math.min(elapsed / duration, 1);
-
-    animCtx.clearRect(x0, y0, cellSize, cellSize);
-    animCtx.beginPath();
-    animCtx.moveTo(line1.x1, line1.y1);
-    animCtx.lineTo(line1.x1 + (line1.x2 - line1.x1) * progress, line1.y1 + (line1.y2 - line1.y1) * progress);
-    animCtx.stroke();
-
-    if (elapsed > duration / 2) {
-      const p2 = Math.min((elapsed - duration / 2) / duration, 1);
+    if (!animate) {
       animCtx.beginPath();
+      animCtx.moveTo(line1.x1, line1.y1);
+      animCtx.lineTo(line1.x2, line1.y2);
       animCtx.moveTo(line2.x1, line2.y1);
-      animCtx.lineTo(line2.x1 + (line2.x2 - line2.x1) * p2, line2.y1 + (line2.y2 - line2.y1) * p2);
+      animCtx.lineTo(line2.x2, line2.y2);
       animCtx.stroke();
+      animCtx.restore();
+      resolve();
+      return;
     }
 
-    if (elapsed < duration * 1.5) requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
+    const duration = 300;
+    let start = null;
+
+    function step(time) {
+      if (!start) start = time;
+      const elapsed = time - start;
+
+      const progress1 = Math.min(elapsed / duration, 1);
+      const progress2 = Math.max(0, Math.min((elapsed - duration / 2) / duration, 1));
+
+      animCtx.clearRect(x0, y0, cellSize, cellSize);
+
+      // primeira diagonal
+      animCtx.beginPath();
+      animCtx.moveTo(line1.x1, line1.y1);
+      animCtx.lineTo(
+        line1.x1 + (line1.x2 - line1.x1) * progress1,
+        line1.y1 + (line1.y2 - line1.y1) * progress1
+      );
+      animCtx.stroke();
+
+      // segunda diagonal
+      if (elapsed > duration / 2) {
+        animCtx.beginPath();
+        animCtx.moveTo(line2.x1, line2.y1);
+        animCtx.lineTo(
+          line2.x1 + (line2.x2 - line2.x1) * progress2,
+          line2.y1 + (line2.y2 - line2.y1) * progress2
+        );
+        animCtx.stroke();
+      }
+
+      if (progress2 < 1) requestAnimationFrame(step);
+      else {
+        animCtx.restore();
+        resolve();
+      }
+    }
+    requestAnimationFrame(step);
+  });
 }
 
 function drawO(row, col, animate = true) {
-  const cx = offsetX + col * cellSize + cellSize / 2;
-  const cy = offsetY + row * cellSize + cellSize / 2;
-  const radius = cellSize * 0.3;
+  return new Promise((resolve) => {
+    const cx = offsetX + col * cellSize + cellSize / 2;
+    const cy = offsetY + row * cellSize + cellSize / 2;
+    const radius = cellSize * 0.3;
 
-  animCtx.lineWidth = 10;
-  animCtx.strokeStyle = '#ff4081';
+    animCtx.save();
+    animCtx.lineWidth = 10;
+    animCtx.strokeStyle = '#ff4081';
 
-  if (!animate) {
-    animCtx.beginPath();
-    animCtx.arc(cx, cy, radius, 0, 2 * Math.PI);
-    animCtx.stroke();
-    return;
-  }
+    if (!animate) {
+      animCtx.beginPath();
+      animCtx.arc(cx, cy, radius, 0, 2 * Math.PI);
+      animCtx.stroke();
+      animCtx.restore();
+      resolve();
+      return;
+    }
 
-  const duration = 600;
-  let start = null;
+    const duration = 400;
+    let start = null;
 
-  function step(time) {
-    if (!start) start = time;
-    const elapsed = time - start;
-    const progress = Math.min(elapsed / duration, 1);
+    function step(time) {
+      if (!start) start = time;
+      const elapsed = time - start;
+      const progress = Math.min(elapsed / duration, 1);
 
-    animCtx.clearRect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 20);
-    animCtx.beginPath();
-    animCtx.arc(cx, cy, radius, 0, progress * 2 * Math.PI);
-    animCtx.stroke();
+      animCtx.clearRect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 20);
+      animCtx.beginPath();
+      animCtx.arc(cx, cy, radius, 0, progress * 2 * Math.PI);
+      animCtx.stroke();
 
-    if (progress < 1) requestAnimationFrame(step);
-  }
+      if (progress < 1) requestAnimationFrame(step);
+      else {
+        animCtx.restore();
+        resolve();
+      }
+    }
 
-  requestAnimationFrame(step);
+    requestAnimationFrame(step);
+  });
 }
 
 function checkWin(p) {
@@ -209,14 +243,14 @@ function checkWin(p) {
   for (const line of lines) {
     const [a,b,c] = line;
     if (board[a[0]][a[1]] === p && board[b[0]][b[1]] === p && board[c[0]][c[1]] === p) {
-      drawWinLine(a, c);
-      return true;
+      return [a, c];
     }
   }
-  return false;
+  return null;
 }
 
 function drawWinLine(a, c) {
+  animCtx.save();
   const pad = cellSize / 2;
   const x1 = offsetX + a[1] * cellSize + pad;
   const y1 = offsetY + a[0] * cellSize + pad;
@@ -233,24 +267,11 @@ function drawWinLine(a, c) {
     animCtx.moveTo(x1, y1);
     animCtx.lineTo(x1 + (x2 - x1) * progress, y1 + (y2 - y1) * progress);
     animCtx.stroke();
-    progress += 0.05;
+    progress += 0.06;
     if (progress <= 1) requestAnimationFrame(animate);
+    else animCtx.restore();
   }
   requestAnimationFrame(animate);
-}
-
-function endGame(winner) {
-  gameOver = true;
-  setTimeout(() => {
-    animCtx.font = `${cellSize * 0.5}px Arial`;
-    animCtx.fillStyle = '#fff';
-    animCtx.textAlign = 'center';
-    animCtx.textBaseline = 'middle';
-    const msg = winner ? `${winner} venceu!` : 'Empate!';
-    animCtx.fillText(msg, window.innerWidth / 2, offsetY / 2);
-    animCtx.font = `${cellSize * 0.25}px Arial`;
-    animCtx.fillText('Clique para reiniciar', window.innerWidth / 2, offsetY / 2 + cellSize * 0.4);
-  }, 400);
 }
 
 // Inicializa
