@@ -1,282 +1,130 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Jogo da Velha com Animações</title>
+<meta charset="UTF-8">
+<title>OFX → JSON Parser Robusto</title>
 <style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-    background: #111;
-  }
-  .layer {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
-  }
+  body { font-family: Arial; padding: 20px; }
+  pre { background: #f3f3f3; padding: 10px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
-<canvas id="canvasBoard" class="layer"></canvas>
-<canvas id="canvasAnim" class="layer"></canvas>
+
+<h1>Converter OFX para JSON</h1>
+<input type="file" id="file" accept=".ofx" />
+<pre id="resultado"></pre>
 
 <script>
-const boardCanvas = document.getElementById('canvasBoard');
-const animCanvas = document.getElementById('canvasAnim');
-const boardCtx = boardCanvas.getContext('2d');
-const animCtx = animCanvas.getContext('2d');
+// ---------------------------------------------
+// 1. Parser robusto linha-a-linha (SGML → XML)
+// ---------------------------------------------
+function ofxToXml(ofxText) {
+  const lines = ofxText.split(/\r?\n/);
+  let xml = "";
+  let started = false;
 
-let board, currentPlayer, gameOver;
-let size, offsetX, offsetY, cellSize;
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
 
-function resetGame() {
-  board = Array(3).fill(null).map(() => Array(3).fill(null));
-  currentPlayer = 'X';
-  gameOver = false;
-  animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
-  drawBoard();
-}
+    // Detecta começo real do OFX
+    if (!started && line.startsWith("<OFX>")) {
+      started = true;
+    }
+    if (!started) continue;
 
-function resizeCanvas() {
-  boardCanvas.width = animCanvas.width = window.innerWidth;
-  boardCanvas.height = animCanvas.height = window.innerHeight;
+    // Se já é XML bem formado, só copia
+    if (/^<[^>]+>.*<\/[^>]+>$/.test(line)) {
+      xml += line + "\n";
+      continue;
+    }
 
-  const side = Math.min(window.innerWidth, window.innerHeight) * 0.8;
-  size = side;
-  offsetX = (window.innerWidth - side) / 2;
-  offsetY = (window.innerHeight - side) / 2;
-  cellSize = side / 3;
+    // Caso SGML sem fechamento:
+    // Ex: <TAG>valor
+    const match = line.match(/^<([A-Z0-9_]+)>(.+)$/i);
+    if (match) {
+      const tag = match[1];
+      const value = match[2].trim();
+      xml += `<${tag}>${value}</${tag}>\n`;
+      continue;
+    }
 
-  drawBoard();
-}
-window.addEventListener('resize', resizeCanvas);
-
-function drawBoard() {
-  boardCtx.clearRect(0, 0, boardCanvas.width, boardCanvas.height);
-  boardCtx.lineWidth = 8;
-  boardCtx.strokeStyle = '#888';
-
-  for (let i = 1; i <= 2; i++) {
-    boardCtx.beginPath();
-    boardCtx.moveTo(offsetX + i * cellSize, offsetY);
-    boardCtx.lineTo(offsetX + i * cellSize, offsetY + size);
-    boardCtx.stroke();
-
-    boardCtx.beginPath();
-    boardCtx.moveTo(offsetX, offsetY + i * cellSize);
-    boardCtx.lineTo(offsetX + size, offsetY + i * cellSize);
-    boardCtx.stroke();
-  }
-
-  // redesenha jogadas já feitas
-  animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      if (board[r][c] === 'X') drawX(r, c, false);
-      if (board[r][c] === 'O') drawO(r, c, false);
+    // Mantém tags como <OFX> ou </OFX>
+    if (line.startsWith("<") && line.endsWith(">")) {
+      xml += line + "\n";
     }
   }
+
+  return xml;
 }
 
-animCanvas.addEventListener('click', async (e) => {
-  if (gameOver) {
-    resetGame();
+// ------------------------------------------------
+// 2. XML → JSON
+// ------------------------------------------------
+function xmlToJson(node) {
+  // Se é nó de texto: retorna só o texto (sem "#text")
+  if (node.nodeType === 3) {
+    const text = node.nodeValue.trim();
+    return text === "" ? null : text;
+  }
+
+  // Nó de elemento
+  let obj = {};
+  let hasElementChildren = false;
+
+  for (const child of node.childNodes) {
+    // Texto direto dentro de um elemento: retorna string simples
+    if (child.nodeType === 3) {
+      const text = child.nodeValue.trim();
+      if (text !== "") {
+        return text; // <-- importância: retorna valor direto!
+      }
+      continue;
+    }
+
+    hasElementChildren = true;
+
+    const name = child.nodeName;
+    const value = xmlToJson(child);
+
+    if (value === null || value === "") continue;
+
+    if (obj[name]) {
+      if (!Array.isArray(obj[name])) obj[name] = [obj[name]];
+      obj[name].push(value);
+    } else {
+      obj[name] = value;
+    }
+  }
+
+  if (!hasElementChildren) return null;
+  return obj;
+}
+// ------------------------------------------------
+// 3. Processa arquivo
+// ------------------------------------------------
+document.getElementById("file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const text = await file.text();
+  const xmlString = ofxToXml(text);
+
+  const dom = new DOMParser().parseFromString(xmlString, "text/xml");
+
+  // Se XML tem erro, mostrar no console para revisão
+  if (dom.getElementsByTagName("parsererror").length > 0) {
+    document.getElementById("resultado").textContent =
+      "⚠ OFX contém erros estruturais, revise o XML gerado.\n\n" + xmlString;
     return;
   }
 
-  const x = e.clientX - offsetX;
-  const y = e.clientY - offsetY;
-  if (x < 0 || y < 0 || x > size || y > size) return;
+  const json = xmlToJson(dom.documentElement);
 
-  const c = Math.floor(x / cellSize);
-  const r = Math.floor(y / cellSize);
-  if (board[r][c]) return;
-
-  board[r][c] = currentPlayer;
-  const drawPromise =
-    currentPlayer === 'X' ? drawX(r, c, true) : drawO(r, c, true);
-
-  const winner = checkWin(currentPlayer);
-  await drawPromise;
-
-  if (winner) {
-    drawWinLine(winner[0], winner[1]);
-    gameOver = true;
-    return;
-  }
-
-  if (board.flat().every(cell => cell)) {
-    gameOver = true;
-    return;
-  }
-
-  currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+  document.getElementById("resultado").textContent =
+    JSON.stringify(json, null, 2);
 });
-
-function drawX(row, col, animate = true) {
-  return new Promise((resolve) => {
-    const x0 = offsetX + col * cellSize;
-    const y0 = offsetY + row * cellSize;
-    const pad = cellSize * 0.2;
-
-    const line1 = { x1: x0 + pad, y1: y0 + pad, x2: x0 + cellSize - pad, y2: y0 + cellSize - pad };
-    const line2 = { x1: x0 + cellSize - pad, y1: y0 + pad, x2: x0 + pad, y2: y0 + cellSize - pad };
-
-    animCtx.save();
-    animCtx.lineWidth = 10;
-    animCtx.strokeStyle = '#00ffff';
-    animCtx.lineCap = 'round';
-
-    if (!animate) {
-      animCtx.beginPath();
-      animCtx.moveTo(line1.x1, line1.y1);
-      animCtx.lineTo(line1.x2, line1.y2);
-      animCtx.moveTo(line2.x1, line2.y1);
-      animCtx.lineTo(line2.x2, line2.y2);
-      animCtx.stroke();
-      animCtx.restore();
-      resolve();
-      return;
-    }
-
-    const duration = 300;
-    let start = null;
-
-    function step(time) {
-      if (!start) start = time;
-      const elapsed = time - start;
-
-      const progress1 = Math.min(elapsed / duration, 1);
-      const progress2 = Math.max(0, Math.min((elapsed - duration / 2) / duration, 1));
-
-      animCtx.clearRect(x0, y0, cellSize, cellSize);
-
-      // primeira diagonal
-      animCtx.beginPath();
-      animCtx.moveTo(line1.x1, line1.y1);
-      animCtx.lineTo(
-        line1.x1 + (line1.x2 - line1.x1) * progress1,
-        line1.y1 + (line1.y2 - line1.y1) * progress1
-      );
-      animCtx.stroke();
-
-      // segunda diagonal
-      if (elapsed > duration / 2) {
-        animCtx.beginPath();
-        animCtx.moveTo(line2.x1, line2.y1);
-        animCtx.lineTo(
-          line2.x1 + (line2.x2 - line2.x1) * progress2,
-          line2.y1 + (line2.y2 - line2.y1) * progress2
-        );
-        animCtx.stroke();
-      }
-
-      if (progress2 < 1) requestAnimationFrame(step);
-      else {
-        animCtx.restore();
-        resolve();
-      }
-    }
-    requestAnimationFrame(step);
-  });
-}
-
-function drawO(row, col, animate = true) {
-  return new Promise((resolve) => {
-    const cx = offsetX + col * cellSize + cellSize / 2;
-    const cy = offsetY + row * cellSize + cellSize / 2;
-    const radius = cellSize * 0.3;
-
-    animCtx.save();
-    animCtx.lineWidth = 10;
-    animCtx.strokeStyle = '#ff4081';
-
-    if (!animate) {
-      animCtx.beginPath();
-      animCtx.arc(cx, cy, radius, 0, 2 * Math.PI);
-      animCtx.stroke();
-      animCtx.restore();
-      resolve();
-      return;
-    }
-
-    const duration = 400;
-    let start = null;
-
-    function step(time) {
-      if (!start) start = time;
-      const elapsed = time - start;
-      const progress = Math.min(elapsed / duration, 1);
-
-      animCtx.clearRect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 20);
-      animCtx.beginPath();
-      animCtx.arc(cx, cy, radius, 0, progress * 2 * Math.PI);
-      animCtx.stroke();
-
-      if (progress < 1) requestAnimationFrame(step);
-      else {
-        animCtx.restore();
-        resolve();
-      }
-    }
-
-    requestAnimationFrame(step);
-  });
-}
-
-function checkWin(p) {
-  const lines = [
-    [[0,0],[0,1],[0,2]],
-    [[1,0],[1,1],[1,2]],
-    [[2,0],[2,1],[2,2]],
-    [[0,0],[1,0],[2,0]],
-    [[0,1],[1,1],[2,1]],
-    [[0,2],[1,2],[2,2]],
-    [[0,0],[1,1],[2,2]],
-    [[0,2],[1,1],[2,0]],
-  ];
-  for (const line of lines) {
-    const [a,b,c] = line;
-    if (board[a[0]][a[1]] === p && board[b[0]][b[1]] === p && board[c[0]][c[1]] === p) {
-      return [a, c];
-    }
-  }
-  return null;
-}
-
-function drawWinLine(a, c) {
-  animCtx.save();
-  const pad = cellSize / 2;
-  const x1 = offsetX + a[1] * cellSize + pad;
-  const y1 = offsetY + a[0] * cellSize + pad;
-  const x2 = offsetX + c[1] * cellSize + pad;
-  const y2 = offsetY + c[0] * cellSize + pad;
-
-  let progress = 0;
-  animCtx.strokeStyle = '#00ff00';
-  animCtx.lineWidth = 12;
-  animCtx.lineCap = 'round';
-
-  function animate() {
-    animCtx.beginPath();
-    animCtx.moveTo(x1, y1);
-    animCtx.lineTo(x1 + (x2 - x1) * progress, y1 + (y2 - y1) * progress);
-    animCtx.stroke();
-    progress += 0.06;
-    if (progress <= 1) requestAnimationFrame(animate);
-    else animCtx.restore();
-  }
-  requestAnimationFrame(animate);
-}
-
-// Inicializa
-resetGame();
-resizeCanvas();
 </script>
+
 </body>
 </html>
